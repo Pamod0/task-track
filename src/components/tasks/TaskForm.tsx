@@ -13,7 +13,7 @@ import {
   set, 
   push, 
   update, 
-  ServerValue // Changed from 'serverTimestamp as rtdbServerTimestamp'
+  serverTimestamp // Correct import for RTDB server timestamp
 } from "firebase/database";
 
 import { Button } from "@/components/ui/button";
@@ -74,10 +74,13 @@ const getWeekOptions = () => {
   });
 };
 
+// Helper function to calculate the week number within a month (1-5)
 const calculateWeekNumberForMonth = (d: Date): number => {
   const dayOfMonth = d.getDate();
-  return Math.min(Math.ceil(dayOfMonth / 7), 5);
+  // Week 1: 1-7, Week 2: 8-14, Week 3: 15-21, Week 4: 22-28, Week 5: 29+
+  return Math.min(Math.ceil(dayOfMonth / 7), 5); 
 };
+
 
 const selfRatingOptions = [
   { value: 1, label: "1 - Needs Improvement" },
@@ -134,7 +137,7 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
         await update(taskRef, {
           ...commonTaskData,
           userDisplayName: currentUser.displayName || currentUser.email || "Unknown User", 
-          updatedAt: ServerValue.TIMESTAMP, // Used ServerValue.TIMESTAMP
+          updatedAt: serverTimestamp(), // Use serverTimestamp() from firebase/database
         });
         toast({ title: "Task Updated!", description: "Your task has been successfully updated in Realtime Database." });
         
@@ -159,8 +162,8 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
           ...commonTaskData,
           userId: currentUser.id,
           userDisplayName: currentUser.displayName || currentUser.email || "Unknown User",
-          createdAt: ServerValue.TIMESTAMP, // Used ServerValue.TIMESTAMP
-          updatedAt: ServerValue.TIMESTAMP, // Used ServerValue.TIMESTAMP
+          createdAt: serverTimestamp(), // Use serverTimestamp() from firebase/database
+          updatedAt: serverTimestamp(), // Use serverTimestamp() from firebase/database
         };
         await set(newTaskRef, newTaskPayload);
         toast({ title: "Task Saved!", description: "Your new task has been successfully saved to Realtime Database." });
@@ -197,19 +200,21 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
     }
   }
   
-  useEffect(() => {
+ useEffect(() => {
     const currentSelectedDate = form.getValues('date');
-    if (currentSelectedDate && (!initialData?.week || !initialData)) {
-      const newWeekNumber = calculateWeekNumberForMonth(currentSelectedDate);
-      const weekOptions = getWeekOptions();
-      const targetWeekValue = weekOptions[newWeekNumber - 1]?.value || weekOptions[0].value;
-      
-      if (form.getValues('week') !== targetWeekValue || (!initialData && !form.formState.isSubmitted)) {
-         form.setValue('week', targetWeekValue, { shouldValidate: true });
-      }
+    if (currentSelectedDate) {
+        const newWeekNumber = calculateWeekNumberForMonth(currentSelectedDate);
+        const weekOptions = getWeekOptions();
+        const targetWeekValue = weekOptions[newWeekNumber - 1]?.value || weekOptions[0].value;
+
+        // Only update if the week is different or if it's a new form and not yet submitted
+        if (form.getValues('week') !== targetWeekValue || (!initialData && !form.formState.isSubmitted)) {
+            form.setValue('week', targetWeekValue, { shouldValidate: true });
+        }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.watch('date'), initialData?.week, form.setValue, form.getValues, form.formState.isSubmitted]);
+  }, [form.watch('date'), initialData, form.setValue, form.getValues, form.formState.isSubmitted]);
+
 
 
   return (
