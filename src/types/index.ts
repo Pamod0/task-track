@@ -14,7 +14,12 @@ export interface Task {
   userDisplayName?: string; // For admin view convenience
   description: string;
   date: string; // ISO string e.g., YYYY-MM-DD
-  tags: string[];
+  week: string; // e.g., "Week 01"
+  progress: number; // 0-100
+  timeSpent: number; // in hours
+  challengesFaced?: string;
+  supportNeeded?: string;
+  selfRating: number; // 1-5
   createdAt: number; // Firestore Timestamp or JS milliseconds
   updatedAt: number; // Firestore Timestamp or JS milliseconds
 }
