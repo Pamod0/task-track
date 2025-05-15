@@ -8,12 +8,19 @@ import { useRouter } from "next/navigation";
 import { useState, useEffect } from "react";
 import { format } from "date-fns";
 import { CalendarIcon, Loader2 } from "lucide-react";
+import { 
+  addDoc, 
+  collection, 
+  doc, 
+  serverTimestamp, 
+  updateDoc,
+  type FieldValue
+} from "firebase/firestore";
 
 import { Button } from "@/components/ui/button";
 import {
   Form,
   FormControl,
-  FormDescription,
   FormField,
   FormItem,
   FormLabel,
@@ -35,6 +42,7 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import type { Task } from "@/types";
 import { useAuth } from "@/hooks/useAuth";
+import { db } from "@/lib/firebase/firebase"; // Import Firestore instance
 
 // Zod Schema for form validation
 const taskFormSchema = z.object({
@@ -44,7 +52,7 @@ const taskFormSchema = z.object({
   date: z.date({ required_error: "Please select a date." }),
   week: z.string().min(1, "Please select a week."),
   progress: z.number().min(0, "Progress must be at least 0.").max(100, "Progress can be at most 100."),
-  timeSpent: z.number().positive("Time spent must be a positive number.").max(24, "Time spent cannot exceed 24 hours for a single task log."), // Assuming max 24h for a single log
+  timeSpent: z.number().positive("Time spent must be a positive number.").max(24, "Time spent cannot exceed 24 hours for a single task log."),
   challengesFaced: z.string().max(1000, "Challenges faced can be at most 1000 characters.").optional().or(z.literal("")),
   supportNeeded: z.string().max(1000, "Support needed can be at most 1000 characters.").optional().or(z.literal("")),
   selfRating: z.coerce.number().min(1, "Self-rating must be between 1 and 5.").max(5, "Self-rating must be between 1 and 5."),
@@ -53,12 +61,12 @@ const taskFormSchema = z.object({
 type TaskFormValues = z.infer<typeof taskFormSchema>;
 
 interface TaskFormProps {
-  initialData?: Partial<Task>;
+  initialData?: Task; // Changed to full Task for ID
   onSubmitSuccess?: (data: Task) => void;
 }
 
 const getWeekOptions = () => {
-  return Array.from({ length: 5 }, (_, i) => { // Changed from 52 to 5
+  return Array.from({ length: 5 }, (_, i) => {
     const weekNum = i + 1;
     return {
       value: `Week ${String(weekNum).padStart(2, '0')}`,
@@ -67,11 +75,8 @@ const getWeekOptions = () => {
   });
 };
 
-// Helper function to calculate week number (1-5 based on day of month)
 const calculateWeekNumberForMonth = (d: Date): number => {
   const dayOfMonth = d.getDate();
-  // Simple distribution: 1-7 is week 1, 8-14 is week 2, etc.
-  // Week 5 will cover days 29, 30, 31.
   return Math.min(Math.ceil(dayOfMonth / 7), 5);
 };
 
@@ -99,7 +104,7 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
       timeSpent: initialData?.timeSpent || 0,
       challengesFaced: initialData?.challengesFaced || "",
       supportNeeded: initialData?.supportNeeded || "",
-      selfRating: initialData?.selfRating || 3, // Default to 3-Good
+      selfRating: initialData?.selfRating || 3,
     },
   });
 
@@ -107,72 +112,109 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
 
   async function onSubmit(values: TaskFormValues) {
     if (!currentUser) {
-      toast({ title: "Authentication Error", description: "You must be logged in to create a task.", variant: "destructive" });
+      toast({ title: "Authentication Error", description: "You must be logged in to create or update a task.", variant: "destructive" });
       return;
     }
     setIsLoading(true);
     
-    const taskData: Omit<Task, 'id' | 'createdAt' | 'updatedAt'> = {
-      userId: currentUser.id,
-      userDisplayName: currentUser.displayName || currentUser.email,
+    const commonTaskData = {
       description: values.description,
-      date: format(values.date, "yyyy-MM-dd"), // Format date to string for storage
+      date: format(values.date, "yyyy-MM-dd"),
       week: values.week,
       progress: values.progress,
       timeSpent: values.timeSpent,
-      challengesFaced: values.challengesFaced,
-      supportNeeded: values.supportNeeded,
+      challengesFaced: values.challengesFaced || "",
+      supportNeeded: values.supportNeeded || "",
       selfRating: values.selfRating,
     };
 
-    // TODO: Replace console.log with actual Firestore submission logic
-    console.log("Task data to be saved:", taskData);
+    try {
+      if (initialData?.id) {
+        // Update existing task
+        const taskDocRef = doc(db, "tasks", initialData.id);
+        await updateDoc(taskDocRef, {
+          ...commonTaskData,
+          userDisplayName: currentUser.displayName || currentUser.email || "Unknown User", 
+          updatedAt: serverTimestamp() as FieldValue,
+        });
+        toast({ title: "Task Updated!", description: "Your task has been successfully updated." });
+        
+        if (onSubmitSuccess) {
+          const updatedTaskForClient: Task = {
+            ...initialData, 
+            ...commonTaskData,
+            userDisplayName: currentUser.displayName || currentUser.email || "Unknown User",
+            updatedAt: Date.now(), 
+          };
+          onSubmitSuccess(updatedTaskForClient);
+        } else {
+          router.push("/dashboard"); 
+        }
 
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1000));
+      } else {
+        // Create new task
+        const newTaskPayload = {
+          ...commonTaskData,
+          userId: currentUser.id,
+          userDisplayName: currentUser.displayName || currentUser.email || "Unknown User",
+          createdAt: serverTimestamp() as FieldValue,
+          updatedAt: serverTimestamp() as FieldValue,
+        };
+        const docRef = await addDoc(collection(db, "tasks"), newTaskPayload);
+        toast({ title: "Task Saved!", description: "Your new task has been successfully saved." });
 
-    toast({
-      title: initialData ? "Task Updated!" : "Task Saved!",
-      description: "Your task details have been saved successfully (simulated).",
-    });
-
-    if (onSubmitSuccess) {
-      onSubmitSuccess({
-        ...taskData,
-        id: initialData?.id || crypto.randomUUID(),
-        createdAt: initialData?.createdAt || Date.now(),
-        updatedAt: Date.now(),
+        if (onSubmitSuccess) {
+          const savedTaskForClient: Task = {
+            ...commonTaskData,
+            id: docRef.id,
+            userId: currentUser.id,
+            userDisplayName: currentUser.displayName || currentUser.email || "Unknown User",
+            createdAt: Date.now(), 
+            updatedAt: Date.now(), 
+          };
+          onSubmitSuccess(savedTaskForClient);
+        } else {
+           form.reset({
+             ...values, // reset with current values to avoid data loss if user wants to submit another
+             date: new Date(), // reset date to today
+             week: getWeekOptions()[calculateWeekNumberForMonth(new Date()) - 1]?.value || getWeekOptions()[0].value, // reset week
+             progress: 0, // reset progress
+             // keep description if user wants to quickly log another similar task
+           }); 
+           // Consider if navigation is always desired after saving a new task, or if form should clear for another entry.
+           // For now, let's keep the current navigation for consistency
+           router.push("/dashboard"); 
+        }
+      }
+    } catch (error) {
+      console.error("Error saving task to Firestore: ", error);
+      toast({
+        title: "Database Error",
+        description: "Could not save task. Please check console for details and try again.",
+        variant: "destructive",
       });
-    } else {
-       form.reset(); 
-       router.push("/dashboard"); 
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   }
   
   useEffect(() => {
-    if (!initialData?.week) {
-      const currentFormWeek = form.getValues('week');
+    // This effect synchronizes the 'week' field with the selected 'date'
+    // if 'initialData.week' is not set (i.e., for a new task or if week was never set).
+    // It also ensures the week is correctly set if 'initialData' exists but week isn't there.
+    const currentSelectedDate = form.getValues('date');
+    if (currentSelectedDate && (!initialData?.week || !initialData)) {
+      const newWeekNumber = calculateWeekNumberForMonth(currentSelectedDate);
       const weekOptions = getWeekOptions();
-      const calculatedCurrentWeekNum = calculateWeekNumberForMonth(new Date()); // Use new helper
-      const targetWeekIndex = calculatedCurrentWeekNum - 1;
+      const targetWeekValue = weekOptions[newWeekNumber - 1]?.value || weekOptions[0].value;
       
-      let expectedCurrentWeekValue: string | undefined;
-      if (targetWeekIndex >= 0 && targetWeekIndex < weekOptions.length) {
-        expectedCurrentWeekValue = weekOptions[targetWeekIndex]?.value;
-      } else {
-        expectedCurrentWeekValue = weekOptions[0]?.value; // Fallback
-      }
-
-      if (expectedCurrentWeekValue && currentFormWeek !== expectedCurrentWeekValue) {
-         const isCurrentFormWeekInitial = initialData?.week === currentFormWeek;
-         if(!isCurrentFormWeekInitial) {
-            form.setValue('week', expectedCurrentWeekValue);
-         }
+      // Only set if different to avoid unnecessary re-renders or if it's the initial load for a new form
+      if (form.getValues('week') !== targetWeekValue || (!initialData && !form.formState.isSubmitted)) {
+         form.setValue('week', targetWeekValue, { shouldValidate: true });
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialData?.week, form.getValues, form.setValue]);
+  }, [form.watch('date'), initialData?.week, form.setValue, form.getValues, form.formState.isSubmitted]);
 
 
   return (
@@ -228,10 +270,7 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
                       selected={field.value}
                       onSelect={(date) => {
                         field.onChange(date);
-                        if (date) {
-                          const newWeekNumber = calculateWeekNumberForMonth(date);
-                          form.setValue('week', getWeekOptions()[newWeekNumber - 1]?.value || getWeekOptions()[0].value);
-                        }
+                        // Week update is handled by useEffect watching field.value (date)
                       }}
                       disabled={(date) =>
                         date > new Date() || date < new Date("2000-01-01")
@@ -251,7 +290,7 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Week</FormLabel>
-                <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
+                <Select onValueChange={field.onChange} value={field.value} defaultValue={field.value}>
                   <FormControl>
                     <SelectTrigger>
                       <SelectValue placeholder="Select week" />
@@ -298,7 +337,7 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
             <FormItem>
               <FormLabel>Time Spent (Hours)</FormLabel>
               <FormControl>
-                <Input type="number" placeholder="0" {...field} onChange={e => field.onChange(parseFloat(e.target.value) || 0)} />
+                <Input type="number" step="0.1" placeholder="0" {...field} onChange={e => field.onChange(parseFloat(e.target.value) || 0)} />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -347,7 +386,7 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Self-Rating (1-5)</FormLabel>
-                <Select onValueChange={(value) => field.onChange(parseInt(value))} defaultValue={String(field.value)}>
+                <Select onValueChange={(value) => field.onChange(parseInt(value))} value={String(field.value)} defaultValue={String(field.value)}>
                   <FormControl>
                     <SelectTrigger>
                       <SelectValue placeholder="Select rating" />
@@ -370,12 +409,13 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
             <Button type="button" variant="outline" onClick={() => router.back()} disabled={isLoading}>
                 Cancel
             </Button>
-            <Button type="submit" className="w-full sm:w-auto" disabled={isLoading || !form.formState.isValid}>
+            <Button type="submit" className="w-full sm:w-auto" disabled={isLoading || !form.formState.isDirty && !!initialData}>
               {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              {initialData ? "Update Task" : "Save Task"}
+              {initialData?.id ? "Update Task" : "Save Task"}
             </Button>
         </div>
       </form>
     </Form>
   );
 }
+
