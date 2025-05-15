@@ -13,7 +13,7 @@ import {
   set, 
   push, 
   update, 
-  serverTimestamp as rtdbServerTimestamp // Renamed for clarity
+  ServerValue // Changed from 'serverTimestamp as rtdbServerTimestamp'
 } from "firebase/database";
 
 import { Button } from "@/components/ui/button";
@@ -134,7 +134,7 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
         await update(taskRef, {
           ...commonTaskData,
           userDisplayName: currentUser.displayName || currentUser.email || "Unknown User", 
-          updatedAt: rtdbServerTimestamp, // RTDB server timestamp
+          updatedAt: ServerValue.TIMESTAMP, // Used ServerValue.TIMESTAMP
         });
         toast({ title: "Task Updated!", description: "Your task has been successfully updated in Realtime Database." });
         
@@ -159,8 +159,8 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
           ...commonTaskData,
           userId: currentUser.id,
           userDisplayName: currentUser.displayName || currentUser.email || "Unknown User",
-          createdAt: rtdbServerTimestamp, // RTDB server timestamp
-          updatedAt: rtdbServerTimestamp, // RTDB server timestamp
+          createdAt: ServerValue.TIMESTAMP, // Used ServerValue.TIMESTAMP
+          updatedAt: ServerValue.TIMESTAMP, // Used ServerValue.TIMESTAMP
         };
         await set(newTaskRef, newTaskPayload);
         toast({ title: "Task Saved!", description: "Your new task has been successfully saved to Realtime Database." });
