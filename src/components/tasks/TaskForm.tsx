@@ -58,7 +58,7 @@ interface TaskFormProps {
 }
 
 const getWeekOptions = () => {
-  return Array.from({ length: 52 }, (_, i) => {
+  return Array.from({ length: 5 }, (_, i) => { // Changed from 52 to 5
     const weekNum = i + 1;
     return {
       value: `Week ${String(weekNum).padStart(2, '0')}`,
@@ -67,16 +67,12 @@ const getWeekOptions = () => {
   });
 };
 
-// Helper function to calculate week number
-const calculateWeekNumber = (d: Date): number => {
-  const date = new Date(d.getTime());
-  date.setHours(0, 0, 0, 0);
-  // Thursday in current week decides the year.
-  date.setDate(date.getDate() + 3 - (date.getDay() + 6) % 7);
-  // January 4 is always in week 1.
-  const week1 = new Date(date.getFullYear(), 0, 4);
-  // Adjust to Thursday in week 1 and count number of weeks from date to week1.
-  return 1 + Math.round(((date.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
+// Helper function to calculate week number (1-5 based on day of month)
+const calculateWeekNumberForMonth = (d: Date): number => {
+  const dayOfMonth = d.getDate();
+  // Simple distribution: 1-7 is week 1, 8-14 is week 2, etc.
+  // Week 5 will cover days 29, 30, 31.
+  return Math.min(Math.ceil(dayOfMonth / 7), 5);
 };
 
 const selfRatingOptions = [
@@ -98,7 +94,7 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
     defaultValues: {
       description: initialData?.description || "",
       date: initialData?.date ? new Date(initialData.date) : new Date(),
-      week: initialData?.week || getWeekOptions()[calculateWeekNumber(new Date()) - 1]?.value || getWeekOptions()[0].value,
+      week: initialData?.week || getWeekOptions()[calculateWeekNumberForMonth(new Date()) - 1]?.value || getWeekOptions()[0].value,
       progress: initialData?.progress || 0,
       timeSpent: initialData?.timeSpent || 0,
       challengesFaced: initialData?.challengesFaced || "",
@@ -155,11 +151,10 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
   }
   
   useEffect(() => {
-    // Set default week based on current date if not editing and if not already set by initialData
     if (!initialData?.week) {
       const currentFormWeek = form.getValues('week');
       const weekOptions = getWeekOptions();
-      const calculatedCurrentWeekNum = calculateWeekNumber(new Date());
+      const calculatedCurrentWeekNum = calculateWeekNumberForMonth(new Date()); // Use new helper
       const targetWeekIndex = calculatedCurrentWeekNum - 1;
       
       let expectedCurrentWeekValue: string | undefined;
@@ -169,10 +164,7 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
         expectedCurrentWeekValue = weekOptions[0]?.value; // Fallback
       }
 
-      // If the form's current week value isn't what we expect the current week to be, update it.
-      // This handles cases where defaultValues might not have run with the most up-to-date Date or if form is reset.
       if (expectedCurrentWeekValue && currentFormWeek !== expectedCurrentWeekValue) {
-         // Also ensure currentFormWeek is not already a valid week from initialData that somehow differs from calculated
          const isCurrentFormWeekInitial = initialData?.week === currentFormWeek;
          if(!isCurrentFormWeekInitial) {
             form.setValue('week', expectedCurrentWeekValue);
@@ -234,7 +226,13 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
                     <Calendar
                       mode="single"
                       selected={field.value}
-                      onSelect={field.onChange}
+                      onSelect={(date) => {
+                        field.onChange(date);
+                        if (date) {
+                          const newWeekNumber = calculateWeekNumberForMonth(date);
+                          form.setValue('week', getWeekOptions()[newWeekNumber - 1]?.value || getWeekOptions()[0].value);
+                        }
+                      }}
                       disabled={(date) =>
                         date > new Date() || date < new Date("2000-01-01")
                       }
@@ -253,7 +251,7 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
             render={({ field }) => (
               <FormItem>
                 <FormLabel>Week</FormLabel>
-                <Select onValueChange={field.onChange} defaultValue={field.value}>
+                <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                   <FormControl>
                     <SelectTrigger>
                       <SelectValue placeholder="Select week" />
@@ -381,8 +379,3 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
     </Form>
   );
 }
-
-// Removed global Date prototype extension
-// The calculateWeekNumber function is now defined at the top of this file.
-// Removed declare global { interface Date { getWeek(): number; } }
-
