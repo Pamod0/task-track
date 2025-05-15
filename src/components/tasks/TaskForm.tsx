@@ -9,13 +9,12 @@ import { useState, useEffect } from "react";
 import { format } from "date-fns";
 import { CalendarIcon, Loader2 } from "lucide-react";
 import { 
-  addDoc, 
-  collection, 
-  doc, 
-  serverTimestamp, 
-  updateDoc,
-  type FieldValue
-} from "firebase/firestore";
+  ref, 
+  set, 
+  push, 
+  update, 
+  serverTimestamp as rtdbServerTimestamp // Renamed for clarity
+} from "firebase/database";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -42,7 +41,7 @@ import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import type { Task } from "@/types";
 import { useAuth } from "@/hooks/useAuth";
-import { db } from "@/lib/firebase/firebase"; // Import Firestore instance
+import { database } from "@/lib/firebase/firebase"; // Import Realtime Database instance
 
 // Zod Schema for form validation
 const taskFormSchema = z.object({
@@ -61,7 +60,7 @@ const taskFormSchema = z.object({
 type TaskFormValues = z.infer<typeof taskFormSchema>;
 
 interface TaskFormProps {
-  initialData?: Task; // Changed to full Task for ID
+  initialData?: Task; 
   onSubmitSuccess?: (data: Task) => void;
 }
 
@@ -119,7 +118,7 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
     
     const commonTaskData = {
       description: values.description,
-      date: format(values.date, "yyyy-MM-dd"),
+      date: format(values.date, "yyyy-MM-dd"), // Keep date as string for RTDB
       week: values.week,
       progress: values.progress,
       timeSpent: values.timeSpent,
@@ -130,21 +129,21 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
 
     try {
       if (initialData?.id) {
-        // Update existing task
-        const taskDocRef = doc(db, "tasks", initialData.id);
-        await updateDoc(taskDocRef, {
+        // Update existing task in RTDB
+        const taskRef = ref(database, `tasks/${initialData.id}`);
+        await update(taskRef, {
           ...commonTaskData,
           userDisplayName: currentUser.displayName || currentUser.email || "Unknown User", 
-          updatedAt: serverTimestamp() as FieldValue,
+          updatedAt: rtdbServerTimestamp, // RTDB server timestamp
         });
-        toast({ title: "Task Updated!", description: "Your task has been successfully updated." });
+        toast({ title: "Task Updated!", description: "Your task has been successfully updated in Realtime Database." });
         
         if (onSubmitSuccess) {
           const updatedTaskForClient: Task = {
             ...initialData, 
             ...commonTaskData,
             userDisplayName: currentUser.displayName || currentUser.email || "Unknown User",
-            updatedAt: Date.now(), 
+            updatedAt: Date.now(), // Client-side timestamp for immediate UI update
           };
           onSubmitSuccess(updatedTaskForClient);
         } else {
@@ -152,45 +151,45 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
         }
 
       } else {
-        // Create new task
+        // Create new task in RTDB
+        const tasksRef = ref(database, 'tasks');
+        const newTaskRef = push(tasksRef); // Generate unique ID for new task
+        
         const newTaskPayload = {
           ...commonTaskData,
           userId: currentUser.id,
           userDisplayName: currentUser.displayName || currentUser.email || "Unknown User",
-          createdAt: serverTimestamp() as FieldValue,
-          updatedAt: serverTimestamp() as FieldValue,
+          createdAt: rtdbServerTimestamp, // RTDB server timestamp
+          updatedAt: rtdbServerTimestamp, // RTDB server timestamp
         };
-        const docRef = await addDoc(collection(db, "tasks"), newTaskPayload);
-        toast({ title: "Task Saved!", description: "Your new task has been successfully saved." });
+        await set(newTaskRef, newTaskPayload);
+        toast({ title: "Task Saved!", description: "Your new task has been successfully saved to Realtime Database." });
 
         if (onSubmitSuccess) {
           const savedTaskForClient: Task = {
             ...commonTaskData,
-            id: docRef.id,
+            id: newTaskRef.key!, // Use the key from push() as ID
             userId: currentUser.id,
             userDisplayName: currentUser.displayName || currentUser.email || "Unknown User",
-            createdAt: Date.now(), 
-            updatedAt: Date.now(), 
+            createdAt: Date.now(), // Client-side timestamp
+            updatedAt: Date.now(), // Client-side timestamp
           };
           onSubmitSuccess(savedTaskForClient);
         } else {
            form.reset({
-             ...values, // reset with current values to avoid data loss if user wants to submit another
-             date: new Date(), // reset date to today
-             week: getWeekOptions()[calculateWeekNumberForMonth(new Date()) - 1]?.value || getWeekOptions()[0].value, // reset week
-             progress: 0, // reset progress
-             // keep description if user wants to quickly log another similar task
+             ...values, 
+             date: new Date(), 
+             week: getWeekOptions()[calculateWeekNumberForMonth(new Date()) - 1]?.value || getWeekOptions()[0].value,
+             progress: 0, 
            }); 
-           // Consider if navigation is always desired after saving a new task, or if form should clear for another entry.
-           // For now, let's keep the current navigation for consistency
            router.push("/dashboard"); 
         }
       }
     } catch (error) {
-      console.error("Error saving task to Firestore: ", error);
+      console.error("Error saving task to Realtime Database: ", error);
       toast({
         title: "Database Error",
-        description: "Could not save task. Please check console for details and try again.",
+        description: "Could not save task to Realtime Database. Please check console for details and try again.",
         variant: "destructive",
       });
     } finally {
@@ -199,16 +198,12 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
   }
   
   useEffect(() => {
-    // This effect synchronizes the 'week' field with the selected 'date'
-    // if 'initialData.week' is not set (i.e., for a new task or if week was never set).
-    // It also ensures the week is correctly set if 'initialData' exists but week isn't there.
     const currentSelectedDate = form.getValues('date');
     if (currentSelectedDate && (!initialData?.week || !initialData)) {
       const newWeekNumber = calculateWeekNumberForMonth(currentSelectedDate);
       const weekOptions = getWeekOptions();
       const targetWeekValue = weekOptions[newWeekNumber - 1]?.value || weekOptions[0].value;
       
-      // Only set if different to avoid unnecessary re-renders or if it's the initial load for a new form
       if (form.getValues('week') !== targetWeekValue || (!initialData && !form.formState.isSubmitted)) {
          form.setValue('week', targetWeekValue, { shouldValidate: true });
       }
@@ -270,7 +265,6 @@ export function TaskForm({ initialData, onSubmitSuccess }: TaskFormProps) {
                       selected={field.value}
                       onSelect={(date) => {
                         field.onChange(date);
-                        // Week update is handled by useEffect watching field.value (date)
                       }}
                       disabled={(date) =>
                         date > new Date() || date < new Date("2000-01-01")
